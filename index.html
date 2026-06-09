@@ -419,8 +419,30 @@ html, body { height:100%; overflow:hidden; background:var(--bg); color:var(--tex
 .gallery-empty {
   flex:1; display:flex; align-items:center; justify-content:center;
   color:var(--text-dim); font-size:.8rem; letter-spacing:.15em;
-  text-transform:uppercase;
+  text-transform:uppercase; padding:2rem;
 }
+.gallery-placeholder {
+  width:100%; aspect-ratio:2/3; border-radius:4px;
+  border:1px solid var(--border); overflow:hidden;
+  position:relative; background:var(--surface);
+  display:flex; align-items:center; justify-content:center;
+}
+.placeholder-shimmer {
+  position:absolute; inset:0;
+  background:linear-gradient(90deg,transparent 0%,rgba(201,168,76,.07) 50%,transparent 100%);
+  background-size:200% 100%;
+  animation:shimmer 1.6s infinite;
+}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.placeholder-text {
+  font-size:.72rem; letter-spacing:.15em; color:var(--text-dim);
+  text-transform:uppercase; position:relative; z-index:1;
+}
+.gallery-err {
+  padding:.8rem; font-size:.75rem; color:var(--text-dim);
+  border:1px dashed var(--border); border-radius:4px; text-align:center; width:100%;
+}
+.gallery-err a{color:var(--gold);}
 
 /* ══════════════════════════════════════════════
    TOAST
@@ -787,25 +809,31 @@ function removeGenerating() {
 // ── Gallery update ──
 function updateGallery() {
   const body = document.getElementById("galleryBody");
-  const empty = document.getElementById("galleryEmpty");
   const badge = document.getElementById("pagesBadge");
   body.innerHTML = "";
   if (generatedPages.length === 0) {
-    body.appendChild(empty);
+    body.innerHTML = '<div class="gallery-empty">No pages generated yet</div>';
     badge.style.display = "none";
     return;
   }
+  const real = generatedPages.filter(u => u !== null).length;
   badge.style.display = "inline";
-  badge.textContent = generatedPages.length;
+  badge.textContent = real + "/" + generatedPages.length;
   generatedPages.forEach((url, i) => {
     const item = document.createElement("div");
     item.className = "gallery-page-item";
-    item.innerHTML = `
-      <div class="page-num">Page ${i + 1} of ${generatedPages.length}</div>
-      <img class="gallery-img" src="${url}" alt="Page ${i+1}" loading="lazy" crossorigin="anonymous"/>
-    `;
+    if (!url) {
+      item.innerHTML = '<div class="page-num">Page ' + (i+1) + ' of ' + generatedPages.length + ' — Generating...</div>'
+        + '<div class="gallery-placeholder"><div class="placeholder-shimmer"></div>'
+        + '<div class="placeholder-text">Rendering page ' + (i+1) + '...</div></div>';
+    } else {
+      item.innerHTML = '<div class="page-num">Page ' + (i+1) + ' of ' + generatedPages.length + '</div>'
+        + '<img class="gallery-img" src="' + url + '" alt="Page ' + (i+1) + '" '
+        + 'onerror="this.outerHTML='<div class=gallery-err>Failed — <a href=' + url + ' target=_blank>Open directly</a></div>'" />';
+    }
     body.appendChild(item);
   });
+  body.scrollTop = body.scrollHeight;
 }
 
 // ── Download All ──
@@ -954,41 +982,44 @@ OUTPUT ONLY THE JSON ARRAY:`;
     const pageCount = finalPages.length;
 
     removeGenerating();
-    addMsg("ai", `Generating <strong>${pageCount} ${currentMode} pages</strong> from your story. Please wait...`);
-    showGenerating();
 
-    // 2) Generate images via Pollinations
-    const newUrls = [];
-    for (let i = 0; i < finalPages.length; i++) {
-      const p = finalPages[i];
-      const styleTag = currentMode === "MANGA"
-        ? "manga black and white detailed panels screentone"
-        : currentMode === "COMIC"
-        ? "american comic book colored bold outlines superhero"
-        : "manhwa korean webtoon full color detailed";
-      
-      const fullPrompt = `${p.prompt}, ${styleTag}, professional quality, high detail, page layout with panels`;
-      const encoded = encodeURIComponent(fullPrompt);
-      const url = `${POLLINATIONS}${encoded}?width=800&height=1200&seed=${Date.now() + i}&nologo=true`;
-      newUrls.push(url);
-    }
-
-    // Spend credits
+    // Spend credits first
     if (!unlimited) {
       await window._fb.spendCredits(currentUser.uid, pageCount);
       credits -= pageCount;
     }
 
-    // Add to gallery
-    generatedPages = [...generatedPages, ...newUrls];
+    addMsg("ai", `Generating <strong>${pageCount} ${currentMode} pages</strong> one by one. Opening gallery...`);
+    openGallery();
+
+    // 2) Generate images one-at-a-time with delay to avoid Pollinations rate limit
+    const styleTag = currentMode === "MANGA"
+      ? "manga page black and white screentone panels dramatic action"
+      : currentMode === "COMIC"
+      ? "american comic book page bold colors strong outlines dynamic"
+      : "manhwa webtoon page full color korean style vertical panels";
+
+    // Pre-fill with nulls so gallery shows placeholders immediately
+    const startIdx = generatedPages.length;
+    for (let i = 0; i < finalPages.length; i++) generatedPages.push(null);
     updateGallery();
 
-    removeGenerating();
-    addMsg("ai", `✦ <strong>${pageCount} pages generated!</strong> Click the <strong>Pages</strong> button (top right) to view and download your ${currentMode} pages.${!unlimited ? `<br><br>Credits remaining: <strong>${Math.max(0, credits)}</strong> / 25` : ""}`);
+    for (let i = 0; i < finalPages.length; i++) {
+      const p = finalPages[i];
+      const seed = Math.floor(Math.random() * 9999999) + i * 1337;
+      const promptEnc = encodeURIComponent(
+        p.prompt + ", " + styleTag + ", professional quality, high detail, multiple panel layout comic page"
+      );
+      generatedPages[startIdx + i] = `https://image.pollinations.ai/prompt/${promptEnc}?width=768&height=1152&seed=${seed}&model=flux`;
+      updateGallery();
+      // 3s gap between each image to avoid queue-full errors
+      if (i < finalPages.length - 1) await new Promise(r => setTimeout(r, 3000));
+    }
 
-    // Auto-open gallery
-    openGallery();
+    updateGallery();
     refreshCreditsUI();
+    addMsg("ai", `✦ <strong>${pageCount} pages ready!</strong> ${!unlimited ? "Credits remaining: <strong>" + Math.max(0, credits) + "</strong> / 25" : "Unlimited mode active"}`);
+
 
   } catch(err) {
     removeGenerating();
