@@ -827,9 +827,19 @@ function updateGallery() {
         + '<div class="gallery-placeholder"><div class="placeholder-shimmer"></div>'
         + '<div class="placeholder-text">Rendering page ' + (i+1) + '...</div></div>';
     } else {
-      item.innerHTML = '<div class="page-num">Page ' + (i+1) + ' of ' + generatedPages.length + '</div>'
-        + '<img class="gallery-img" src="' + url + '" alt="Page ' + (i+1) + '" '
-        + 'onerror="this.outerHTML='<div class=gallery-err>Failed — <a href=' + url + ' target=_blank>Open directly</a></div>'" />';
+      const idx2 = i;
+      const imgEl = document.createElement("img");
+      imgEl.className = "gallery-img";
+      imgEl.alt = "Page " + (i+1);
+      imgEl.src = url;
+      imgEl.onerror = function() {
+        this.outerHTML = '<div class="gallery-err">Image failed to load.<br><a href="' + url + '" target="_blank">Open in new tab</a></div>';
+      };
+      const pn = document.createElement("div");
+      pn.className = "page-num";
+      pn.textContent = "Page " + (i+1) + " of " + generatedPages.length;
+      item.appendChild(pn);
+      item.appendChild(imgEl);
     }
     body.appendChild(item);
   });
@@ -1010,10 +1020,10 @@ OUTPUT ONLY THE JSON ARRAY:`;
       const promptEnc = encodeURIComponent(
         p.prompt + ", " + styleTag + ", professional quality, high detail, multiple panel layout comic page"
       );
-      generatedPages[startIdx + i] = `https://image.pollinations.ai/prompt/${promptEnc}?width=768&height=1152&seed=${seed}&model=flux`;
+      const imgUrl = await generateImageWithFallback(p.prompt + ", " + styleTag, seed);
+      generatedPages[startIdx + i] = imgUrl;
       updateGallery();
-      // 3s gap between each image to avoid queue-full errors
-      if (i < finalPages.length - 1) await new Promise(r => setTimeout(r, 3000));
+      if (i < finalPages.length - 1) await new Promise(r => setTimeout(r, 1500));
     }
 
     updateGallery();
@@ -1027,6 +1037,27 @@ OUTPUT ONLY THE JSON ARRAY:`;
   }
 
   isGenerating = false;
+}
+
+
+// Image generation with HEAD-check fallback across Pollinations variants
+async function generateImageWithFallback(prompt, seed) {
+  const enc = encodeURIComponent(prompt + ", professional quality, detailed panels, comic page layout");
+  const s = seed || Math.floor(Math.random() * 999999);
+  const candidates = [
+    "https://image.pollinations.ai/prompt/" + enc + "?width=768&height=1152&seed=" + s + "&model=flux&nologo=true",
+    "https://image.pollinations.ai/prompt/" + enc + "?width=512&height=768&seed=" + s + "&nologo=true",
+    "https://image.pollinations.ai/prompt/" + enc + "?seed=" + s,
+  ];
+  for (const url of candidates) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
+      const ct = res.headers.get("content-type") || "";
+      if (res.ok && ct.includes("image")) return url;
+    } catch(e) { /* try next */ }
+    await new Promise(r => setTimeout(r, 600));
+  }
+  return candidates[0]; // last resort
 }
 
 // ── OpenRouter call ──
