@@ -891,46 +891,62 @@ async function sendMessage() {
     const sysPrompt = MODE_PROMPTS[currentMode];
     const maxPages = unlimited ? 25 : Math.min(credits, 25);
 
-    const planPrompt = `You are MACO-AI, a specialized ${currentMode} page generation system.
+    const planPrompt = `RESPOND WITH ONLY A JSON ARRAY. NO EXPLANATION. NO MARKDOWN. NO BACKTICKS. JUST THE RAW JSON ARRAY STARTING WITH [ AND ENDING WITH ].
 
-STORY SCRIPT:
-${story}
+Generate ${Math.min(maxPages, 6)} ${currentMode} manga page image prompts for this story:
+STORY: ${story}
+DESIGN: ${design || "black and white, dynamic panels, detailed artwork"}
 
-DESIGN SCRIPT:
-${design || "Default: Black and white, dynamic panels, detailed artwork"}
+Each element: {"page":1,"prompt":"...detailed image prompt..."}
+Style: ${currentMode === "MANGA" ? "Japanese manga black and white screentone panels" : currentMode === "COMIC" ? "American comic book bold colors strong outlines" : "Korean manhwa webtoon full color vertical panels"}
 
-TASK: Analyze the story and generate image prompts for each page. Maximum ${maxPages} pages.
+OUTPUT ONLY THE JSON ARRAY:`;
 
-IMPORTANT RULES:
-- Each page = one full manga/comic/manhwa page with multiple panels
-- Keep pages within ${maxPages} limit even if story is longer
-- Output ONLY valid JSON, no markdown, no extra text
+    const aiRes = await callOpenRouter(planPrompt, "You output only raw JSON arrays. No markdown. No backticks. No explanation. Start your response with [ and end with ].");
 
-OUTPUT FORMAT (strict JSON array):
-[
-  {
-    "page": 1,
-    "prompt": "detailed image generation prompt for this page describing panels, characters, actions, mood, art style"
-  }
-]
-
-Generate ${currentMode}-style prompts. Each prompt should be detailed, describing panel layout, character poses, expressions, backgrounds, visual effects. Include art style from design script.`;
-
-    const aiRes = await callOpenRouter(planPrompt, sysPrompt);
-    
-    // Parse page prompts
+    // Robust parser — handle markdown fences, extra text, etc.
     let pages = [];
     try {
-      const cleaned = aiRes.replace(/```json|```/g, "").trim();
-      pages = JSON.parse(cleaned);
+      // Strip any markdown fences
+      let cleaned = aiRes
+        .replace(/```json/gi, "")
+        .replace(/```/g, "")
+        .trim();
+
+      // Try direct parse first
+      try {
+        pages = JSON.parse(cleaned);
+      } catch(_) {
+        // Extract the first [ ... ] block
+        const match = cleaned.match(/\[[\s\S]*\]/);
+        if (match) {
+          pages = JSON.parse(match[0]);
+        } else {
+          // Last resort: build pages from any "prompt" values found
+          const prompts = [...cleaned.matchAll(/"prompt"\s*:\s*"((?:[^"\\]|\\.)*)"/g)];
+          if (prompts.length > 0) {
+            pages = prompts.map((m, i) => ({ page: i + 1, prompt: m[1] }));
+          } else {
+            // Fallback: generate generic prompts from story
+            const pageCount = Math.min(3, maxPages);
+            pages = Array.from({ length: pageCount }, (_, i) => ({
+              page: i + 1,
+              prompt: `${currentMode} page ${i + 1}: ${story.slice(0, 120)}, dramatic panel layout, ${design || "black and white detailed"}`
+            }));
+          }
+        }
+      }
     } catch(e) {
-      // try to extract JSON array
-      const match = aiRes.match(/\[[\s\S]*\]/);
-      if (match) pages = JSON.parse(match[0]);
-      else throw new Error("Could not parse page list from AI");
+      // Hard fallback — always generate something
+      pages = Array.from({ length: Math.min(3, maxPages) }, (_, i) => ({
+        page: i + 1,
+        prompt: `${currentMode} style manga page ${i + 1} showing: ${story.slice(0, 120)}, ${design || "black and white panels, detailed art"}`
+      }));
     }
 
-    if (!Array.isArray(pages) || pages.length === 0) throw new Error("No pages generated");
+    if (!Array.isArray(pages) || pages.length === 0) {
+      pages = [{ page: 1, prompt: `${currentMode} manga page: ${story.slice(0, 150)}, ${design || "black and white detailed panels"}` }];
+    }
 
     // Clamp to credit limit
     const allowed = unlimited ? pages.length : Math.min(pages.length, credits);
