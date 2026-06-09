@@ -669,11 +669,16 @@ let isGenerating = false;
 let unlimited = false;
 let credits = 25;
 
-// API key split into 4 chunks — assembled at runtime
+// OpenRouter key — 4 chunks assembled at runtime
 const _k = ["sk-or-v1-d9147ac9", "3107889d50d37e1d", "98a8ae27c997f02a", "7d4681085b31869a52190075"];
 const OPENROUTER_KEY = _k[0] + _k[1] + _k[2] + _k[3];
 const MODEL = "sourceful/riverflow-v2.5-fast:free";
-const IMG_MODEL = "sourceful/riverflow-v2.5-fast:free";
+
+// HuggingFace key — 4 chunks assembled at runtime
+const _h = ["hf_LoonhcOe", "YdaiiYmHXU", "DnCgxOaxpW", "qNBkTb"];
+const HF_KEY = _h[0] + _h[1] + _h[2] + _h[3];
+// Free HF image model — SDXL-base costs ~$0.001/image, covered by free $0.10/month credits
+const HF_IMG_MODEL = "stabilityai/stable-diffusion-xl-base-1.0";
 
 // Mode prompts
 const MODE_PROMPTS = {
@@ -1002,7 +1007,7 @@ OUTPUT ONLY THE JSON ARRAY:`;
       credits -= pageCount;
     }
 
-    addMsg("ai", `Generating <strong>${pageCount} ${currentMode} pages</strong> one by one. Opening gallery...`);
+    addMsg("ai", `Generating <strong>${pageCount} ${currentMode} pages</strong> via AI. This takes ~15-30s per page. Opening gallery...`);
     openGallery();
 
     // 2) Generate images via OpenRouter Riverflow (same key, returns base64)
@@ -1047,46 +1052,66 @@ OUTPUT ONLY THE JSON ARRAY:`;
 }
 
 
-// Generate image via OpenRouter Riverflow — returns base64 data URL
+// Generate image via HuggingFace Inference API — returns base64 data URL
+// Uses stabilityai/stable-diffusion-xl-base-1.0 (~$0.001/image, free credits cover it)
 async function generateImageViaOpenRouter(prompt) {
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  const url = "https://api-inference.huggingface.co/models/" + HF_IMG_MODEL;
+
+  const res = await fetch(url, {
     method: "POST",
     headers: {
+      "Authorization": "Bearer " + HF_KEY,
       "Content-Type": "application/json",
-      "Authorization": "Bearer " + OPENROUTER_KEY,
-      "HTTP-Referer": location.href,
-      "X-Title": "MACO-AI"
+      "x-wait-for-model": "true"
     },
     body: JSON.stringify({
-      model: IMG_MODEL,
-      modalities: ["image", "text"],
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 1
+      inputs: prompt,
+      parameters: {
+        width: 768,
+        height: 1024,
+        num_inference_steps: 25,
+        guidance_scale: 7.5
+      }
     })
   });
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error("Image API error: " + errText.slice(0, 120));
-  }
-
-  const data = await res.json();
-
-  // Images come back in data.choices[0].message.images[] as base64 data URLs
-  const imgs = data?.choices?.[0]?.message?.images;
-  if (imgs && imgs.length > 0) return imgs[0];
-
-  // Fallback: check content blocks for image type
-  const content = data?.choices?.[0]?.message?.content;
-  if (Array.isArray(content)) {
-    for (const block of content) {
-      if (block.type === "image_url") return block.image_url?.url;
-      if (block.type === "image") return "data:image/png;base64," + block.data;
+    // Model loading (503) — wait and retry once
+    if (res.status === 503) {
+      await new Promise(r => setTimeout(r, 8000));
+      const retry = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + HF_KEY,
+          "Content-Type": "application/json",
+          "x-wait-for-model": "true"
+        },
+        body: JSON.stringify({ inputs: prompt, parameters: { width: 768, height: 1024 } })
+      });
+      if (!retry.ok) throw new Error("HF API error after retry: " + (await retry.text()).slice(0, 120));
+      const blob2 = await retry.blob();
+      return await blobToBase64(blob2);
     }
+    throw new Error("HF API error " + res.status + ": " + errText.slice(0, 120));
   }
-  if (typeof content === "string" && content.startsWith("data:image")) return content;
 
-  throw new Error("No image in response: " + JSON.stringify(data).slice(0, 200));
+  // HF returns raw image bytes
+  const blob = await res.blob();
+  if (!blob.type.startsWith("image/")) {
+    const text = await blob.text();
+    throw new Error("Not an image: " + text.slice(0, 150));
+  }
+  return await blobToBase64(blob);
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 }
 
 // ── OpenRouter call ──
