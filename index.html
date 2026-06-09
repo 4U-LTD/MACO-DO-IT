@@ -673,7 +673,7 @@ let credits = 25;
 const _k = ["sk-or-v1-d9147ac9", "3107889d50d37e1d", "98a8ae27c997f02a", "7d4681085b31869a52190075"];
 const OPENROUTER_KEY = _k[0] + _k[1] + _k[2] + _k[3];
 const MODEL = "sourceful/riverflow-v2.5-fast:free";
-const POLLINATIONS = "https://image.pollinations.ai/prompt/";
+const IMG_MODEL = "sourceful/riverflow-v2.5-fast:free";
 
 // Mode prompts
 const MODE_PROMPTS = {
@@ -826,6 +826,9 @@ function updateGallery() {
       item.innerHTML = '<div class="page-num">Page ' + (i+1) + ' of ' + generatedPages.length + ' — Generating...</div>'
         + '<div class="gallery-placeholder"><div class="placeholder-shimmer"></div>'
         + '<div class="placeholder-text">Rendering page ' + (i+1) + '...</div></div>';
+    } else if (url.startsWith("ERROR:")) {
+      item.innerHTML = '<div class="page-num">Page ' + (i+1) + ' — Failed</div>'
+        + '<div class="gallery-err">' + url.replace("ERROR:", "") + '</div>';
     } else {
       const idx2 = i;
       const imgEl = document.createElement("img");
@@ -1002,33 +1005,37 @@ OUTPUT ONLY THE JSON ARRAY:`;
     addMsg("ai", `Generating <strong>${pageCount} ${currentMode} pages</strong> one by one. Opening gallery...`);
     openGallery();
 
-    // 2) Generate images one-at-a-time with delay to avoid Pollinations rate limit
+    // 2) Generate images via OpenRouter Riverflow (same key, returns base64)
     const styleTag = currentMode === "MANGA"
-      ? "manga page black and white screentone panels dramatic action"
+      ? "Japanese manga style, black and white, screentone shading, expressive characters, dynamic action panels"
       : currentMode === "COMIC"
-      ? "american comic book page bold colors strong outlines dynamic"
-      : "manhwa webtoon page full color korean style vertical panels";
+      ? "American comic book style, bold colors, strong ink outlines, superhero compositions, detailed backgrounds"
+      : "Korean manhwa webtoon style, full vibrant color, beautiful character designs, vertical panel layout";
 
-    // Pre-fill with nulls so gallery shows placeholders immediately
     const startIdx = generatedPages.length;
     for (let i = 0; i < finalPages.length; i++) generatedPages.push(null);
     updateGallery();
+    openGallery();
 
     for (let i = 0; i < finalPages.length; i++) {
       const p = finalPages[i];
-      const seed = Math.floor(Math.random() * 9999999) + i * 1337;
-      const promptEnc = encodeURIComponent(
-        p.prompt + ", " + styleTag + ", professional quality, high detail, multiple panel layout comic page"
-      );
-      const imgUrl = await generateImageWithFallback(p.prompt + ", " + styleTag, seed);
-      generatedPages[startIdx + i] = imgUrl;
+      try {
+        const imgPrompt = p.prompt + ". " + styleTag + ". Full page comic layout with multiple panels. Professional quality manga artwork. High detail.";
+        const b64url = await generateImageViaOpenRouter(imgPrompt);
+        generatedPages[startIdx + i] = b64url;
+      } catch(imgErr) {
+        // Mark as failed but continue with other pages
+        generatedPages[startIdx + i] = "ERROR:" + imgErr.message;
+      }
       updateGallery();
-      if (i < finalPages.length - 1) await new Promise(r => setTimeout(r, 1500));
+      // Brief pause between calls
+      if (i < finalPages.length - 1) await new Promise(r => setTimeout(r, 1000));
     }
 
     updateGallery();
     refreshCreditsUI();
-    addMsg("ai", `✦ <strong>${pageCount} pages ready!</strong> ${!unlimited ? "Credits remaining: <strong>" + Math.max(0, credits) + "</strong> / 25" : "Unlimited mode active"}`);
+    const successCount = generatedPages.slice(startIdx).filter(u => u && !u.startsWith("ERROR:")).length;
+    addMsg("ai", `✦ <strong>${successCount}/${pageCount} pages generated!</strong> ${!unlimited ? "Credits remaining: <strong>" + Math.max(0, credits) + "</strong> / 25" : "Unlimited mode active"}`);
 
 
   } catch(err) {
@@ -1040,24 +1047,46 @@ OUTPUT ONLY THE JSON ARRAY:`;
 }
 
 
-// Image generation with HEAD-check fallback across Pollinations variants
-async function generateImageWithFallback(prompt, seed) {
-  const enc = encodeURIComponent(prompt + ", professional quality, detailed panels, comic page layout");
-  const s = seed || Math.floor(Math.random() * 999999);
-  const candidates = [
-    "https://image.pollinations.ai/prompt/" + enc + "?width=768&height=1152&seed=" + s + "&model=flux&nologo=true",
-    "https://image.pollinations.ai/prompt/" + enc + "?width=512&height=768&seed=" + s + "&nologo=true",
-    "https://image.pollinations.ai/prompt/" + enc + "?seed=" + s,
-  ];
-  for (const url of candidates) {
-    try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
-      const ct = res.headers.get("content-type") || "";
-      if (res.ok && ct.includes("image")) return url;
-    } catch(e) { /* try next */ }
-    await new Promise(r => setTimeout(r, 600));
+// Generate image via OpenRouter Riverflow — returns base64 data URL
+async function generateImageViaOpenRouter(prompt) {
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer " + OPENROUTER_KEY,
+      "HTTP-Referer": location.href,
+      "X-Title": "MACO-AI"
+    },
+    body: JSON.stringify({
+      model: IMG_MODEL,
+      modalities: ["image", "text"],
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 1
+    })
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error("Image API error: " + errText.slice(0, 120));
   }
-  return candidates[0]; // last resort
+
+  const data = await res.json();
+
+  // Images come back in data.choices[0].message.images[] as base64 data URLs
+  const imgs = data?.choices?.[0]?.message?.images;
+  if (imgs && imgs.length > 0) return imgs[0];
+
+  // Fallback: check content blocks for image type
+  const content = data?.choices?.[0]?.message?.content;
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (block.type === "image_url") return block.image_url?.url;
+      if (block.type === "image") return "data:image/png;base64," + block.data;
+    }
+  }
+  if (typeof content === "string" && content.startsWith("data:image")) return content;
+
+  throw new Error("No image in response: " + JSON.stringify(data).slice(0, 200));
 }
 
 // ── OpenRouter call ──
