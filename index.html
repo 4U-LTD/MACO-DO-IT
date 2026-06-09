@@ -1,0 +1,1040 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>MACO-AI</title>
+
+<!-- Firebase -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getDatabase, ref, get, set, serverTimestamp }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBUDIS1b4ijKT5ho2Vuiu7fWdWAvnZ5ehA",
+  authDomain: "myai-2c4b7.firebaseapp.com",
+  databaseURL: "https://myai-2c4b7-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "myai-2c4b7",
+  storageBucket: "myai-2c4b7.firebasestorage.app",
+  messagingSenderId: "858318880695",
+  appId: "1:858318880695:web:db545f8597133d1a59f232",
+  measurementId: "G-BVBF1QHMTN"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getDatabase(app);
+const provider = new GoogleAuthProvider();
+
+// ── Credit helpers ──────────────────────────────────────────────
+const MAX_CREDITS = 25;
+const UNLIMITED_CODE = "UNLIMITEPG66";
+
+async function getCredits(uid) {
+  const snap = await get(ref(db, `users/${uid}`));
+  if (!snap.exists()) return { credits: MAX_CREDITS, unlimited: false };
+  const d = snap.val();
+  if (d.unlimited) return { credits: MAX_CREDITS, unlimited: true };
+  const now = Date.now();
+  const last = d.lastReset || 0;
+  if (now - last > 86400000) {
+    await set(ref(db, `users/${uid}`), { credits: MAX_CREDITS, lastReset: now, unlimited: false });
+    return { credits: MAX_CREDITS, unlimited: false };
+  }
+  return { credits: d.credits ?? MAX_CREDITS, unlimited: false };
+}
+
+async function spendCredits(uid, pages) {
+  const snap = await get(ref(db, `users/${uid}`));
+  if (!snap.exists()) return false;
+  const d = snap.val();
+  if (d.unlimited) return true;
+  const remaining = d.credits ?? 0;
+  if (remaining < pages) return false;
+  await set(ref(db, `users/${uid}`), { ...d, credits: remaining - pages });
+  return true;
+}
+
+async function unlockUnlimited(uid) {
+  const snap = await get(ref(db, `users/${uid}`));
+  const d = snap.exists() ? snap.val() : {};
+  await set(ref(db, `users/${uid}`), { ...d, unlimited: true });
+}
+
+// ── Expose to window ────────────────────────────────────────────
+window._fb = { auth, db, provider, signInWithPopup, signOut, onAuthStateChanged,
+               ref, get, set, getCredits, spendCredits, unlockUnlimited, MAX_CREDITS };
+</script>
+
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   TOKENS — dark gold palette matching ETHICAL.NATION.AI~
+═══════════════════════════════════════════════════════════════ */
+:root {
+  --bg: #000;
+  --surface: #0b0b0f;
+  --surface2: #111118;
+  --border: rgba(255,255,255,0.07);
+  --gold: #c9a84c;
+  --gold2: #e8c96e;
+  --gold-dim: rgba(201,168,76,0.15);
+  --gold-border: rgba(201,168,76,0.35);
+  --text: #e0d8cc;
+  --text-dim: rgba(224,216,204,0.45);
+  --red: #c0392b;
+  --font-disp: 'Cinzel', serif;
+  --font-body: 'Jost', sans-serif;
+  --sidebar-w: 300px;
+  --gallery-w: min(92vw, 480px);
+}
+
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Jost:wght@300;400;500;600&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin:0; padding:0; }
+html, body { height:100%; overflow:hidden; background:var(--bg); color:var(--text); font-family:var(--font-body); }
+
+/* ── scrollbar ── */
+::-webkit-scrollbar { width:4px; height:4px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:var(--gold-border); border-radius:4px; }
+
+/* ══════════════════════════════════════════════
+   LANDING PAGE
+══════════════════════════════════════════════ */
+#landing {
+  position:fixed; inset:0; display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  background:#000; z-index:100;
+  transition:opacity .6s ease, visibility .6s;
+}
+#landing.hidden { opacity:0; visibility:hidden; pointer-events:none; }
+
+.landing-inner { max-width:520px; width:90%; text-align:center; }
+
+.landing-logo {
+  font-family:var(--font-disp); font-size:clamp(2rem,7vw,3.2rem);
+  letter-spacing:.12em; color:var(--gold); margin-bottom:.4rem;
+  text-shadow:0 0 40px rgba(201,168,76,.35);
+}
+.landing-sub {
+  font-size:.7rem; letter-spacing:.35em; color:var(--text-dim);
+  text-transform:uppercase; margin-bottom:2.5rem;
+}
+.about-box {
+  background:rgba(201,168,76,.04); border:1px solid var(--gold-border);
+  border-radius:6px; padding:1.4rem 1.6rem; margin-bottom:2rem;
+  text-align:left; font-size:.83rem; line-height:1.7;
+  color:rgba(224,216,204,.7);
+}
+.about-box strong { color:var(--gold); font-weight:600; }
+
+.btn-google {
+  display:inline-flex; align-items:center; gap:.7rem;
+  background:var(--gold); color:#000;
+  font-family:var(--font-disp); font-size:.78rem; letter-spacing:.18em;
+  text-transform:uppercase; padding:.85rem 2.2rem;
+  border:none; border-radius:3px; cursor:pointer;
+  transition:background .2s, transform .15s;
+}
+.btn-google:hover { background:var(--gold2); transform:translateY(-1px); }
+.btn-google svg { width:18px; height:18px; }
+
+/* ══════════════════════════════════════════════
+   MAIN APP SHELL
+══════════════════════════════════════════════ */
+#app { display:none; height:100%; flex-direction:column; position:relative; }
+#app.visible { display:flex; }
+
+/* ── header ── */
+.header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:.7rem 1rem; border-bottom:1px solid var(--border);
+  flex-shrink:0; position:relative; z-index:10;
+}
+.header-left { display:flex; align-items:center; gap:.8rem; }
+.hamburger-btn {
+  background:none; border:none; cursor:pointer; padding:.3rem;
+  color:var(--text-dim); transition:color .2s;
+}
+.hamburger-btn:hover { color:var(--gold); }
+.hamburger-btn svg { display:block; }
+
+.header-title {
+  font-family:var(--font-disp); font-size:.85rem; letter-spacing:.2em;
+  color:var(--gold); text-transform:uppercase;
+}
+
+.mode-tabs { display:flex; gap:.5rem; }
+.mode-tab {
+  font-family:var(--font-disp); font-size:.65rem; letter-spacing:.15em;
+  text-transform:uppercase; padding:.38rem .85rem;
+  background:transparent; border:1px solid var(--border);
+  color:var(--text-dim); cursor:pointer; border-radius:2px;
+  transition:all .2s;
+}
+.mode-tab.active { background:var(--gold-dim); border-color:var(--gold-border); color:var(--gold); }
+.mode-tab:hover:not(.active) { border-color:var(--gold-border); color:var(--text); }
+
+.header-right { display:flex; align-items:center; gap:.6rem; }
+
+/* gallery button */
+.gallery-btn {
+  background:none; border:1px solid var(--border); border-radius:3px;
+  color:var(--text-dim); cursor:pointer; padding:.38rem .7rem;
+  font-size:.7rem; letter-spacing:.1em; text-transform:uppercase;
+  font-family:var(--font-body); display:flex; align-items:center; gap:.4rem;
+  transition:all .2s;
+}
+.gallery-btn:hover { border-color:var(--gold-border); color:var(--gold); }
+.gallery-btn .badge {
+  background:var(--gold); color:#000; border-radius:10px;
+  font-size:.6rem; padding:.1rem .4rem; font-weight:700;
+}
+
+/* ── chat area ── */
+.chat-area {
+  flex:1; overflow-y:auto; padding:1.2rem 1rem;
+  display:flex; flex-direction:column; gap:1rem;
+}
+.chat-welcome {
+  flex:1; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; text-align:center;
+  gap:.6rem; opacity:.6;
+}
+.chat-welcome-logo {
+  font-family:var(--font-disp); font-size:clamp(1.6rem,5vw,2.4rem);
+  letter-spacing:.15em; color:var(--gold);
+}
+.chat-welcome-sub { font-size:.7rem; letter-spacing:.3em; color:var(--text-dim); text-transform:uppercase; }
+
+/* messages */
+.msg { display:flex; flex-direction:column; gap:.3rem; }
+.msg.user { align-items:flex-end; }
+.msg.ai { align-items:flex-start; }
+.msg-bubble {
+  max-width:85%; padding:.75rem 1rem; border-radius:4px;
+  font-size:.85rem; line-height:1.65;
+}
+.msg.user .msg-bubble {
+  background:rgba(201,168,76,.12); border:1px solid var(--gold-border);
+  color:var(--text);
+}
+.msg.ai .msg-bubble {
+  background:var(--surface2); border:1px solid var(--border);
+  color:var(--text);
+}
+.msg-label { font-size:.62rem; letter-spacing:.2em; color:var(--text-dim); text-transform:uppercase; }
+
+/* generating animation */
+.gen-status {
+  display:flex; align-items:center; gap:.6rem;
+  font-size:.8rem; color:var(--gold); letter-spacing:.1em;
+}
+.gen-dots span {
+  display:inline-block; width:5px; height:5px; border-radius:50%;
+  background:var(--gold); animation:dot-pulse 1.2s ease-in-out infinite;
+}
+.gen-dots span:nth-child(2) { animation-delay:.2s; }
+.gen-dots span:nth-child(3) { animation-delay:.4s; }
+@keyframes dot-pulse { 0%,80%,100%{opacity:.2} 40%{opacity:1} }
+
+/* ── input bar ── */
+.input-bar {
+  flex-shrink:0; padding:.75rem .85rem;
+  border-top:1px solid var(--border);
+  background:var(--surface);
+}
+.input-row { display:flex; gap:.5rem; align-items:flex-end; }
+.script-area {
+  flex:1; display:flex; flex-direction:column; gap:.4rem;
+}
+.script-field {
+  background:var(--surface2); border:1px solid var(--border);
+  border-radius:4px; padding:.55rem .8rem;
+  color:var(--text); font-family:var(--font-body); font-size:.82rem;
+  resize:none; outline:none; transition:border-color .2s;
+  min-height:38px; max-height:100px;
+}
+.script-field::placeholder { color:var(--text-dim); }
+.script-field:focus { border-color:var(--gold-border); }
+.script-label {
+  display:flex; align-items:center; gap:.5rem;
+  font-size:.65rem; letter-spacing:.18em; color:var(--text-dim);
+  text-transform:uppercase; margin-bottom:.2rem;
+}
+.script-label svg { width:13px; height:13px; opacity:.6; }
+
+.send-btn {
+  background:var(--gold); border:none; border-radius:4px;
+  width:48px; height:48px; cursor:pointer; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center;
+  transition:background .2s, transform .15s;
+  align-self:flex-end;
+}
+.send-btn:hover { background:var(--gold2); transform:translateY(-1px); }
+.send-btn svg { width:20px; height:20px; color:#000; }
+
+/* ══════════════════════════════════════════════
+   LEFT SIDEBAR
+══════════════════════════════════════════════ */
+.sidebar-overlay {
+  position:fixed; inset:0; background:rgba(0,0,0,.55);
+  z-index:50; opacity:0; pointer-events:none;
+  transition:opacity .3s;
+}
+.sidebar-overlay.open { opacity:1; pointer-events:all; }
+
+.sidebar {
+  position:fixed; left:0; top:0; bottom:0;
+  width:var(--sidebar-w); background:var(--surface2);
+  border-right:1px solid var(--border);
+  z-index:51; display:flex; flex-direction:column;
+  transform:translateX(-100%);
+  transition:transform .35s cubic-bezier(.4,0,.2,1);
+}
+.sidebar.open { transform:translateX(0); }
+
+.sidebar-head {
+  padding:1.1rem 1.1rem .8rem;
+  border-bottom:1px solid var(--border);
+  display:flex; flex-direction:column; gap:.15rem;
+}
+.sidebar-head-top { display:flex; align-items:flex-start; justify-content:space-between; }
+.sidebar-logo { font-family:var(--font-disp); font-size:1rem; letter-spacing:.2em; color:var(--gold); }
+.sidebar-persona { font-size:.65rem; letter-spacing:.25em; color:var(--text-dim); text-transform:uppercase; margin-top:.1rem; }
+.close-btn {
+  background:none; border:none; cursor:pointer;
+  color:var(--text-dim); transition:color .2s; padding:.2rem;
+}
+.close-btn:hover { color:var(--text); }
+
+.credit-bar {
+  margin-top:.7rem; padding:.65rem .9rem;
+  background:rgba(201,168,76,.06); border:1px solid var(--gold-border);
+  border-radius:4px;
+}
+.credit-label { font-size:.6rem; letter-spacing:.2em; color:var(--text-dim); text-transform:uppercase; margin-bottom:.4rem; }
+.credit-row { display:flex; align-items:center; justify-content:space-between; }
+.credit-count { font-family:var(--font-disp); font-size:1.05rem; color:var(--gold); }
+.credit-max { font-size:.68rem; color:var(--text-dim); }
+.credit-progress { margin-top:.4rem; height:3px; background:rgba(255,255,255,.07); border-radius:2px; overflow:hidden; }
+.credit-fill { height:100%; background:var(--gold); border-radius:2px; transition:width .4s ease; }
+.credit-unlimited { font-size:.7rem; color:var(--gold); letter-spacing:.1em; }
+
+.sidebar-mode-display {
+  padding:.5rem 1.1rem .6rem; border-bottom:1px solid var(--border);
+}
+.mode-display-btn {
+  width:100%; padding:.6rem; border-radius:3px;
+  font-family:var(--font-disp); font-size:.75rem; letter-spacing:.2em;
+  text-transform:uppercase; text-align:center;
+  background:rgba(201,168,76,.1); border:1px solid var(--gold-border);
+  color:var(--gold); cursor:default;
+}
+
+.proxy-section {
+  padding:.6rem 1.1rem .7rem; border-bottom:1px solid var(--border);
+}
+.proxy-label { font-size:.6rem; letter-spacing:.22em; color:var(--text-dim); text-transform:uppercase; margin-bottom:.5rem; }
+.proxy-row { display:flex; gap:.4rem; }
+.proxy-input {
+  flex:1; background:var(--surface); border:1px solid var(--border);
+  border-radius:3px; padding:.45rem .7rem;
+  color:var(--text); font-family:var(--font-body); font-size:.8rem;
+  outline:none; transition:border-color .2s;
+}
+.proxy-input:focus { border-color:var(--gold-border); }
+.proxy-input::placeholder { color:var(--text-dim); }
+.proxy-check {
+  background:rgba(201,168,76,.15); border:1px solid var(--gold-border);
+  border-radius:3px; width:36px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  color:var(--gold); transition:background .2s;
+}
+.proxy-check:hover { background:rgba(201,168,76,.3); }
+
+.sidebar-actions { padding:.6rem 1.1rem; display:flex; flex-direction:column; gap:.3rem; }
+.sidebar-btn {
+  display:flex; align-items:center; gap:.7rem;
+  padding:.55rem .5rem; background:none; border:none;
+  color:var(--text-dim); cursor:pointer; font-family:var(--font-body);
+  font-size:.82rem; border-radius:3px; text-align:left;
+  transition:background .2s, color .2s; width:100%;
+}
+.sidebar-btn:hover { background:rgba(255,255,255,.04); color:var(--text); }
+.sidebar-btn.danger { color:var(--red); }
+.sidebar-btn.danger:hover { background:rgba(192,57,43,.1); color:var(--red); }
+
+.sidebar-section-label {
+  font-size:.58rem; letter-spacing:.28em; color:var(--text-dim);
+  text-transform:uppercase; padding:.3rem .5rem .1rem;
+}
+
+/* ══════════════════════════════════════════════
+   RIGHT GALLERY PANEL
+══════════════════════════════════════════════ */
+.gallery-overlay {
+  position:fixed; inset:0; background:rgba(0,0,0,.6);
+  z-index:60; opacity:0; pointer-events:none;
+  transition:opacity .3s;
+}
+.gallery-overlay.open { opacity:1; pointer-events:all; }
+
+.gallery-panel {
+  position:fixed; right:0; top:0; bottom:0;
+  width:var(--gallery-w);
+  background:var(--surface2); border-left:1px solid var(--border);
+  z-index:61; display:flex; flex-direction:column;
+  transform:translateX(100%);
+  transition:transform .35s cubic-bezier(.4,0,.2,1);
+}
+.gallery-panel.open { transform:translateX(0); }
+
+.gallery-head {
+  padding:.9rem 1rem; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; justify-content:space-between;
+  flex-shrink:0;
+}
+.gallery-title { font-family:var(--font-disp); font-size:.85rem; letter-spacing:.2em; color:var(--gold); }
+.gallery-head-btns { display:flex; gap:.5rem; align-items:center; }
+.dl-btn {
+  display:flex; align-items:center; gap:.4rem;
+  background:var(--gold); color:#000; border:none;
+  border-radius:3px; padding:.4rem .85rem;
+  font-family:var(--font-body); font-size:.72rem; letter-spacing:.1em;
+  text-transform:uppercase; cursor:pointer; transition:background .2s;
+}
+.dl-btn:hover { background:var(--gold2); }
+
+.gallery-body { flex:1; overflow-y:auto; padding:1rem; display:flex; flex-direction:column; gap:1rem; }
+.gallery-page-item { display:flex; flex-direction:column; gap:.4rem; }
+.page-num { font-size:.65rem; letter-spacing:.2em; color:var(--text-dim); text-transform:uppercase; }
+.gallery-img {
+  width:100%; border-radius:4px; border:1px solid var(--border);
+  display:block;
+}
+.gallery-empty {
+  flex:1; display:flex; align-items:center; justify-content:center;
+  color:var(--text-dim); font-size:.8rem; letter-spacing:.15em;
+  text-transform:uppercase;
+}
+
+/* ══════════════════════════════════════════════
+   TOAST
+══════════════════════════════════════════════ */
+#toast {
+  position:fixed; bottom:90px; left:50%; transform:translateX(-50%);
+  background:var(--surface2); border:1px solid var(--border);
+  color:var(--text); padding:.6rem 1.2rem; border-radius:4px;
+  font-size:.8rem; letter-spacing:.08em; z-index:200;
+  opacity:0; pointer-events:none; transition:opacity .3s;
+  white-space:nowrap;
+}
+#toast.show { opacity:1; }
+#toast.gold { border-color:var(--gold-border); color:var(--gold); }
+#toast.err { border-color:rgba(192,57,43,.4); color:#e74c3c; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════ LANDING ═══════════════════ -->
+<div id="landing">
+  <div class="landing-inner">
+    <div class="landing-logo">MACO-AI</div>
+    <div class="landing-sub">Manga · Comic · Manhwa Generator</div>
+    <div class="about-box">
+      <strong>MACO AI</strong> is a specialized AI platform designed to generate detailed manga, manhwa, and comic pages with advanced storytelling and visual creativity. Our AI is trained to assist creators in developing high-quality panels, scripts, characters, and page layouts efficiently.
+      <br><br>
+      We are committed to maintaining a safe and responsible environment. All content generation follows strict usage guidelines, and activities that violate laws, platform policies, or ethical standards are not permitted. Appropriate action may be taken if misuse is detected.
+      <br><br>
+      <strong>Administration:</strong> csharan21022011@gmail.com
+    </div>
+    <button class="btn-google" id="loginBtn">
+      <svg viewBox="0 0 24 24" fill="none">
+        <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+        <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+        <path d="M5.84 14.1c-.22-.66-.35-1.36-.35-2.1s.13-1.44.35-2.1V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l3.66-2.84z" fill="#FBBC05"/>
+        <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335"/>
+      </svg>
+      Login with Google
+    </button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ TOAST ══════════════════════ -->
+<div id="toast"></div>
+
+<!-- ═══════════════════════════════ SIDEBAR OVERLAY ═══════════ -->
+<div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+<!-- ═══════════════════════════════ LEFT SIDEBAR ══════════════ -->
+<div class="sidebar" id="sidebar">
+  <div class="sidebar-head">
+    <div class="sidebar-head-top">
+      <div>
+        <div class="sidebar-logo">MACO-AI</div>
+        <div class="sidebar-persona">MANGA · COMIC · MANHWA</div>
+      </div>
+      <button class="close-btn" id="closeSidebar">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="credit-bar" id="creditBar">
+      <div class="credit-label">Page Credits — 24hr Reset</div>
+      <div class="credit-row">
+        <div class="credit-count" id="creditCount">25</div>
+        <div class="credit-max" id="creditStatus">/ 25 pages</div>
+      </div>
+      <div class="credit-progress"><div class="credit-fill" id="creditFill" style="width:100%"></div></div>
+    </div>
+  </div>
+
+  <div class="sidebar-mode-display">
+    <div class="mode-display-btn" id="modeDisplay">MANGA</div>
+  </div>
+
+  <div class="proxy-section">
+    <div class="proxy-label">Proxy Code</div>
+    <div class="proxy-row">
+      <input class="proxy-input" id="proxyInput" type="password" placeholder="Enter access code"/>
+      <button class="proxy-check" id="proxySubmit">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="sidebar-actions">
+    <button class="sidebar-btn" id="newChatBtn">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      New Chat
+    </button>
+    <div class="sidebar-section-label">History</div>
+    <button class="sidebar-btn danger" id="deleteHistoryBtn">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>
+      </svg>
+      Delete History
+    </button>
+    <button class="sidebar-btn danger" id="exitBtn">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+      </svg>
+      Exit
+    </button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ GALLERY OVERLAY ═══════════ -->
+<div class="gallery-overlay" id="galleryOverlay"></div>
+
+<!-- ═══════════════════════════════ GALLERY PANEL ══════════════ -->
+<div class="gallery-panel" id="galleryPanel">
+  <div class="gallery-head">
+    <div class="gallery-title">GENERATED PAGES</div>
+    <div class="gallery-head-btns">
+      <button class="dl-btn" id="downloadAllBtn">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        Download All
+      </button>
+      <button class="close-btn" id="closeGallery">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+  <div class="gallery-body" id="galleryBody">
+    <div class="gallery-empty" id="galleryEmpty">No pages generated yet</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ MAIN APP ═══════════════════ -->
+<div id="app">
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <button class="hamburger-btn" id="hamburgerBtn">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+      <div class="header-title">MACO-AI</div>
+    </div>
+
+    <div class="mode-tabs">
+      <button class="mode-tab active" data-mode="MANGA">MANGA</button>
+      <button class="mode-tab" data-mode="COMIC">COMIC</button>
+      <button class="mode-tab" data-mode="MANHWA">MANHWA</button>
+    </div>
+
+    <div class="header-right">
+      <button class="gallery-btn" id="openGalleryBtn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/>
+          <polyline points="21 15 16 10 5 21"/>
+        </svg>
+        Pages
+        <span class="badge" id="pagesBadge" style="display:none">0</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Chat -->
+  <div class="chat-area" id="chatArea">
+    <div class="chat-welcome" id="chatWelcome">
+      <div class="chat-welcome-logo">MACO-AI</div>
+      <div class="chat-welcome-sub">Begin your session</div>
+    </div>
+  </div>
+
+  <!-- Input Bar -->
+  <div class="input-bar">
+    <div class="input-row">
+      <div class="script-area">
+        <div>
+          <div class="script-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+            </svg>
+            Story Script
+          </div>
+          <textarea class="script-field" id="storyInput" rows="2" placeholder="Paste your story script here..."></textarea>
+        </div>
+        <div>
+          <div class="script-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
+              <path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/>
+            </svg>
+            Design Script
+          </div>
+          <textarea class="script-field" id="designInput" rows="2" placeholder="B&W or color, panel count, layout style, character details..."></textarea>
+        </div>
+      </div>
+      <button class="send-btn" id="sendBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SCRIPTS ════════════════════ -->
+<script>
+// ── wait for Firebase module to load ──
+function waitFB(cb) {
+  if (window._fb) cb();
+  else setTimeout(() => waitFB(cb), 80);
+}
+
+// ── Globals ──
+let currentUser = null;
+let currentMode = "MANGA";
+let generatedPages = [];
+let isGenerating = false;
+let unlimited = false;
+let credits = 25;
+
+// API key split into 4 chunks — assembled at runtime
+const _k = ["sk-or-v1-d9147ac9", "3107889d50d37e1d", "98a8ae27c997f02a", "7d4681085b31869a52190075"];
+const OPENROUTER_KEY = _k[0] + _k[1] + _k[2] + _k[3];
+const MODEL = "sourceful/riverflow-v2.5-fast:free";
+const POLLINATIONS = "https://image.pollinations.ai/prompt/";
+
+// Mode prompts
+const MODE_PROMPTS = {
+  MANGA: "You are an expert manga page layout AI. Generate detailed manga-style page descriptions with black and white panels, dynamic action lines, expressive characters with large eyes, detailed screentones, Japanese manga aesthetic.",
+  COMIC: "You are an expert comic book page AI. Generate detailed American/Western comic style pages with bold colors (describe them), strong outlines, dynamic superhero-style compositions, detailed backgrounds, speech bubbles.",
+  MANHWA: "You are an expert manhwa page AI. Generate detailed Korean manhwa-style pages with full color panels (describe colors), webtoon vertical scroll format, beautiful character designs, detailed backgrounds, modern style."
+};
+
+// ── Toast ──
+function toast(msg, type = "") {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.className = "show" + (type ? " " + type : "");
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.className = "", 2800);
+}
+
+// ── Sidebar ──
+document.getElementById("hamburgerBtn").onclick = openSidebar;
+document.getElementById("closeSidebar").onclick = closeSidebar;
+document.getElementById("sidebarOverlay").onclick = closeSidebar;
+
+function openSidebar() {
+  document.getElementById("sidebar").classList.add("open");
+  document.getElementById("sidebarOverlay").classList.add("open");
+  refreshCreditsUI();
+}
+function closeSidebar() {
+  document.getElementById("sidebar").classList.remove("open");
+  document.getElementById("sidebarOverlay").classList.remove("open");
+}
+
+// ── Gallery ──
+document.getElementById("openGalleryBtn").onclick = openGallery;
+document.getElementById("closeGallery").onclick = closeGallery;
+document.getElementById("galleryOverlay").onclick = closeGallery;
+
+function openGallery() {
+  document.getElementById("galleryPanel").classList.add("open");
+  document.getElementById("galleryOverlay").classList.add("open");
+}
+function closeGallery() {
+  document.getElementById("galleryPanel").classList.remove("open");
+  document.getElementById("galleryOverlay").classList.remove("open");
+}
+
+// ── Mode tabs ──
+document.querySelectorAll(".mode-tab").forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll(".mode-tab").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    currentMode = btn.dataset.mode;
+    document.getElementById("modeDisplay").textContent = currentMode;
+  };
+});
+
+// ── Proxy code ──
+document.getElementById("proxySubmit").onclick = async () => {
+  const code = document.getElementById("proxyInput").value.trim();
+  if (!code || !currentUser) return;
+  if (code === "UNLIMITEPG66") {
+    await window._fb.unlockUnlimited(currentUser.uid);
+    unlimited = true;
+    credits = 25;
+    toast("∞ Unlimited credits unlocked!", "gold");
+    refreshCreditsUI();
+    document.getElementById("proxyInput").value = "";
+  } else {
+    toast("Invalid code", "err");
+  }
+};
+
+// ── Credits UI ──
+async function refreshCreditsUI() {
+  if (!currentUser) return;
+  const data = await window._fb.getCredits(currentUser.uid);
+  unlimited = data.unlimited;
+  credits = data.credits;
+  const el = document.getElementById("creditCount");
+  const fill = document.getElementById("creditFill");
+  const status = document.getElementById("creditStatus");
+  if (unlimited) {
+    el.textContent = "∞";
+    fill.style.width = "100%";
+    status.textContent = "Unlimited";
+  } else {
+    el.textContent = credits;
+    fill.style.width = (credits / 25 * 100) + "%";
+    status.textContent = "/ 25 pages";
+  }
+}
+
+// ── Chat helpers ──
+function addMsg(role, html) {
+  const welcome = document.getElementById("chatWelcome");
+  if (welcome) welcome.remove();
+  const area = document.getElementById("chatArea");
+  const div = document.createElement("div");
+  div.className = "msg " + role;
+  div.innerHTML = `
+    <div class="msg-label">${role === "user" ? "YOU" : "MACO-AI"}</div>
+    <div class="msg-bubble">${html}</div>
+  `;
+  area.appendChild(div);
+  area.scrollTop = area.scrollHeight;
+  return div;
+}
+
+function showGenerating() {
+  const area = document.getElementById("chatArea");
+  const welcome = document.getElementById("chatWelcome");
+  if (welcome) welcome.remove();
+  const div = document.createElement("div");
+  div.className = "msg ai";
+  div.id = "genMsg";
+  div.innerHTML = `
+    <div class="msg-label">MACO-AI</div>
+    <div class="msg-bubble">
+      <div class="gen-status">
+        <span>Generating pages</span>
+        <div class="gen-dots"><span></span><span></span><span></span></div>
+      </div>
+    </div>
+  `;
+  area.appendChild(div);
+  area.scrollTop = area.scrollHeight;
+}
+function removeGenerating() {
+  const el = document.getElementById("genMsg");
+  if (el) el.remove();
+}
+
+// ── Gallery update ──
+function updateGallery() {
+  const body = document.getElementById("galleryBody");
+  const empty = document.getElementById("galleryEmpty");
+  const badge = document.getElementById("pagesBadge");
+  body.innerHTML = "";
+  if (generatedPages.length === 0) {
+    body.appendChild(empty);
+    badge.style.display = "none";
+    return;
+  }
+  badge.style.display = "inline";
+  badge.textContent = generatedPages.length;
+  generatedPages.forEach((url, i) => {
+    const item = document.createElement("div");
+    item.className = "gallery-page-item";
+    item.innerHTML = `
+      <div class="page-num">Page ${i + 1} of ${generatedPages.length}</div>
+      <img class="gallery-img" src="${url}" alt="Page ${i+1}" loading="lazy" crossorigin="anonymous"/>
+    `;
+    body.appendChild(item);
+  });
+}
+
+// ── Download All ──
+document.getElementById("downloadAllBtn").onclick = async () => {
+  if (generatedPages.length === 0) { toast("No pages to download", "err"); return; }
+  toast("Downloading " + generatedPages.length + " pages...", "gold");
+  for (let i = 0; i < generatedPages.length; i++) {
+    try {
+      const r = await fetch(generatedPages[i]);
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `MACO-AI-page-${i + 1}.jpg`;
+      a.click();
+      await new Promise(r => setTimeout(r, 400));
+    } catch(e) {
+      // fallback: open in new tab
+      window.open(generatedPages[i], "_blank");
+    }
+  }
+};
+
+// ── New Chat ──
+document.getElementById("newChatBtn").onclick = () => {
+  generatedPages = [];
+  updateGallery();
+  const area = document.getElementById("chatArea");
+  area.innerHTML = `
+    <div class="chat-welcome" id="chatWelcome">
+      <div class="chat-welcome-logo">MACO-AI</div>
+      <div class="chat-welcome-sub">Begin your session</div>
+    </div>
+  `;
+  closeSidebar();
+  toast("New chat started");
+};
+
+// ── Delete History ──
+document.getElementById("deleteHistoryBtn").onclick = () => {
+  document.getElementById("newChatBtn").click();
+  toast("History cleared");
+};
+
+// ── Exit ──
+document.getElementById("exitBtn").onclick = async () => {
+  await window._fb.signOut(window._fb.auth);
+};
+
+// ── SEND ──
+document.getElementById("sendBtn").onclick = sendMessage;
+document.addEventListener("keydown", e => {
+  if (e.ctrlKey && e.key === "Enter") sendMessage();
+});
+
+async function sendMessage() {
+  if (isGenerating) return;
+  const story = document.getElementById("storyInput").value.trim();
+  const design = document.getElementById("designInput").value.trim();
+  if (!story) { toast("Please enter a story script", "err"); return; }
+  if (!currentUser) { toast("Please login first", "err"); return; }
+
+  // refresh credits
+  const data = await window._fb.getCredits(currentUser.uid);
+  unlimited = data.unlimited;
+  credits = data.credits;
+
+  if (!unlimited && credits <= 0) {
+    toast("No page credits remaining. Resets in 24hrs.", "err");
+    return;
+  }
+
+  isGenerating = true;
+  document.getElementById("storyInput").value = "";
+  document.getElementById("designInput").value = "";
+
+  // Show user message
+  const userMsg = `<strong>Story:</strong> ${escHtml(story)}${design ? `<br><br><strong>Design:</strong> ${escHtml(design)}` : ""}`;
+  addMsg("user", userMsg);
+  showGenerating();
+
+  try {
+    // 1) Ask AI how many pages & get prompts
+    const sysPrompt = MODE_PROMPTS[currentMode];
+    const maxPages = unlimited ? 25 : Math.min(credits, 25);
+
+    const planPrompt = `You are MACO-AI, a specialized ${currentMode} page generation system.
+
+STORY SCRIPT:
+${story}
+
+DESIGN SCRIPT:
+${design || "Default: Black and white, dynamic panels, detailed artwork"}
+
+TASK: Analyze the story and generate image prompts for each page. Maximum ${maxPages} pages.
+
+IMPORTANT RULES:
+- Each page = one full manga/comic/manhwa page with multiple panels
+- Keep pages within ${maxPages} limit even if story is longer
+- Output ONLY valid JSON, no markdown, no extra text
+
+OUTPUT FORMAT (strict JSON array):
+[
+  {
+    "page": 1,
+    "prompt": "detailed image generation prompt for this page describing panels, characters, actions, mood, art style"
+  }
+]
+
+Generate ${currentMode}-style prompts. Each prompt should be detailed, describing panel layout, character poses, expressions, backgrounds, visual effects. Include art style from design script.`;
+
+    const aiRes = await callOpenRouter(planPrompt, sysPrompt);
+    
+    // Parse page prompts
+    let pages = [];
+    try {
+      const cleaned = aiRes.replace(/```json|```/g, "").trim();
+      pages = JSON.parse(cleaned);
+    } catch(e) {
+      // try to extract JSON array
+      const match = aiRes.match(/\[[\s\S]*\]/);
+      if (match) pages = JSON.parse(match[0]);
+      else throw new Error("Could not parse page list from AI");
+    }
+
+    if (!Array.isArray(pages) || pages.length === 0) throw new Error("No pages generated");
+
+    // Clamp to credit limit
+    const allowed = unlimited ? pages.length : Math.min(pages.length, credits);
+    const finalPages = pages.slice(0, allowed);
+    const pageCount = finalPages.length;
+
+    removeGenerating();
+    addMsg("ai", `Generating <strong>${pageCount} ${currentMode} pages</strong> from your story. Please wait...`);
+    showGenerating();
+
+    // 2) Generate images via Pollinations
+    const newUrls = [];
+    for (let i = 0; i < finalPages.length; i++) {
+      const p = finalPages[i];
+      const styleTag = currentMode === "MANGA"
+        ? "manga black and white detailed panels screentone"
+        : currentMode === "COMIC"
+        ? "american comic book colored bold outlines superhero"
+        : "manhwa korean webtoon full color detailed";
+      
+      const fullPrompt = `${p.prompt}, ${styleTag}, professional quality, high detail, page layout with panels`;
+      const encoded = encodeURIComponent(fullPrompt);
+      const url = `${POLLINATIONS}${encoded}?width=800&height=1200&seed=${Date.now() + i}&nologo=true`;
+      newUrls.push(url);
+    }
+
+    // Spend credits
+    if (!unlimited) {
+      await window._fb.spendCredits(currentUser.uid, pageCount);
+      credits -= pageCount;
+    }
+
+    // Add to gallery
+    generatedPages = [...generatedPages, ...newUrls];
+    updateGallery();
+
+    removeGenerating();
+    addMsg("ai", `✦ <strong>${pageCount} pages generated!</strong> Click the <strong>Pages</strong> button (top right) to view and download your ${currentMode} pages.${!unlimited ? `<br><br>Credits remaining: <strong>${Math.max(0, credits)}</strong> / 25` : ""}`);
+
+    // Auto-open gallery
+    openGallery();
+    refreshCreditsUI();
+
+  } catch(err) {
+    removeGenerating();
+    addMsg("ai", `Error: ${escHtml(err.message || "Generation failed. Please try again.")}`);
+  }
+
+  isGenerating = false;
+}
+
+// ── OpenRouter call ──
+async function callOpenRouter(userMsg, sysMsg) {
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${OPENROUTER_KEY}`,
+      "HTTP-Referer": location.href,
+      "X-Title": "MACO-AI"
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      messages: [
+        { role: "system", content: sysMsg },
+        { role: "user", content: userMsg }
+      ],
+      max_tokens: 4000,
+      temperature: 0.8
+    })
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error("OpenRouter error: " + err.slice(0, 200));
+  }
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || "";
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+// ── Auth ──
+waitFB(() => {
+  const { auth, onAuthStateChanged, signInWithPopup, provider } = window._fb;
+
+  document.getElementById("loginBtn").onclick = () => {
+    signInWithPopup(auth, provider).catch(e => toast(e.message, "err"));
+  };
+
+  onAuthStateChanged(auth, async user => {
+    currentUser = user;
+    if (user) {
+      document.getElementById("landing").classList.add("hidden");
+      document.getElementById("app").classList.add("visible");
+      await refreshCreditsUI();
+      toast("Welcome, " + (user.displayName || user.email).split(" ")[0] + "!", "gold");
+    } else {
+      document.getElementById("landing").classList.remove("hidden");
+      document.getElementById("app").classList.remove("visible");
+    }
+  });
+});
+</script>
+</body>
+</html>
